@@ -45,7 +45,8 @@ RUN pip install --no-cache-dir \
     sqlalchemy psycopg2-binary \
     pyyaml toml jsonlines \
     tqdm rich \
-    openpyxl weasyprint
+    openpyxl weasyprint \
+    python-docx python-pptx pypdf csvkit
 
 COPY . .
 RUN pip install --no-cache-dir .
