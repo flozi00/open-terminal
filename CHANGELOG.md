@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] - 2026-03-09
+
+### Fixed
+
+- 🐛 **Multi-user file operations** — all file endpoints (list, read, view, display, replace, grep, glob, upload) now correctly run as the provisioned user. Previously only write/delete/move were handled, causing `PermissionError` on reads in user home directories.
+
+### Changed
+
+- ♻️ **UserFS abstraction** (`open_terminal/utils/fs.py`) — unified filesystem interface that transparently routes I/O through `sudo -u` in multi-user mode. Endpoints receive a `UserFS` instance via dependency injection and no longer branch on mode. Replaces per-endpoint sudo wrappers.
+
 ## [0.11.0] - 2026-03-09
 
 ### Added
