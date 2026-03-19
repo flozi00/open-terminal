@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.22] - 2026-03-19
+
+### Fixed
+
+- 🐛 **`/ports` returns 500 in multi-user mode on restricted runtimes** — the endpoint triggered full user provisioning (`useradd`) just to filter ports by UID. On container runtimes that reject `useradd` (e.g. Azure Container Apps), this crashed with an unhandled exception. Now returns an empty port list when provisioning fails — an unprovisioned user has no ports to show. ([#80](https://github.com/open-webui/open-terminal/issues/80))
+- 🐳 **Docker-in-Docker broken in multi-user mode** — mounting the Docker socket (`-v /var/run/docker.sock:/var/run/docker.sock`) with `OPEN_TERMINAL_MULTI_USER=true` failed because only the default `user` account was added to the socket's group. Dynamically provisioned users now automatically inherit Docker socket group membership when the socket is mounted. ([#83](https://github.com/open-webui/open-terminal/issues/83))
+
 ## [0.11.21] - 2026-03-19
 
 ### Fixed

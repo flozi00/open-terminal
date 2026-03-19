@@ -1112,7 +1112,13 @@ async def list_ports(request: Request):
     """
     all_ports = await asyncio.to_thread(detect_listening_ports)
 
-    fs = get_filesystem(request)
+    try:
+        fs = get_filesystem(request)
+    except Exception:
+        # User provisioning failed (e.g. useradd rejected in restricted
+        # container runtimes).  An unprovisioned user has no ports.
+        return {"ports": []}
+
     if fs.username:
         # Filter by user UID
         import pwd

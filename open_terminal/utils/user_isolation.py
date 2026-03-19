@@ -104,6 +104,18 @@ def ensure_os_user(username: str) -> str:
     # read files natively without subprocess.
     server_user = os.getenv("USER", "user")
     _run_privileged(["usermod", "-aG", username, server_user])
+    # If the Docker socket is mounted, add the new user to its group
+    # so docker commands work without sudo (mirrors entrypoint.sh).
+    _DOCKER_SOCK = "/var/run/docker.sock"
+    if os.path.exists(_DOCKER_SOCK):
+        import grp as _grp
+        sock_gid = os.stat(_DOCKER_SOCK).st_gid
+        try:
+            sock_group = _grp.getgrgid(sock_gid).gr_name
+            _run_privileged(["usermod", "-aG", sock_group, username])
+            log.info("Added %s to Docker socket group '%s'", username, sock_group)
+        except (KeyError, subprocess.CalledProcessError) as exc:
+            log.warning("Could not add %s to Docker socket group: %s", username, exc)
     # Refresh the running process's supplementary group list so the new
     # group takes effect immediately (normally requires re-login).
     import ctypes
