@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.24] - 2026-03-20
+
+### Added
+
+- 📄 **Office document text extraction** in `read_file` — `.docx`, `.xlsx`, and `.pptx` files are now automatically converted to text and returned in the standard JSON format, making them readable by LLMs. Word documents extract paragraphs and table contents, Excel spreadsheets render all sheets as tab-separated values, and PowerPoint presentations extract text from all slides. Supports `start_line`/`end_line` range selection.
+
 ## [0.11.23] - 2026-03-19
 
 ### Fixed

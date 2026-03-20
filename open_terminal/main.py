@@ -426,6 +426,69 @@ async def read_file(
                 "content": "".join(lines[start:end]),
             }
 
+        # Extract text from Word documents (.docx)
+        if mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            from docx import Document as DocxDocument
+
+            doc = await asyncio.to_thread(DocxDocument, target)
+            parts = []
+            for para in doc.paragraphs:
+                parts.append(para.text)
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append("\t".join(cell.text for cell in row.cells))
+            text = "\n".join(parts)
+            lines = text.splitlines(keepends=True)
+            start = (start_line or 1) - 1
+            end = end_line or len(lines)
+            return {
+                "path": target,
+                "total_lines": len(lines),
+                "content": "".join(lines[start:end]),
+            }
+
+        # Extract text from Excel spreadsheets (.xlsx)
+        if mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            from openpyxl import load_workbook
+
+            wb = await asyncio.to_thread(load_workbook, target, read_only=True, data_only=True)
+            parts = []
+            for sheet in wb.worksheets:
+                parts.append(f"--- {sheet.title} ---")
+                for row in sheet.iter_rows(values_only=True):
+                    parts.append("\t".join(str(c) if c is not None else "" for c in row))
+            wb.close()
+            text = "\n".join(parts)
+            lines = text.splitlines(keepends=True)
+            start = (start_line or 1) - 1
+            end = end_line or len(lines)
+            return {
+                "path": target,
+                "total_lines": len(lines),
+                "content": "".join(lines[start:end]),
+            }
+
+        # Extract text from PowerPoint presentations (.pptx)
+        if mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            from pptx import Presentation
+
+            prs = await asyncio.to_thread(Presentation, target)
+            parts = []
+            for i, slide in enumerate(prs.slides, 1):
+                parts.append(f"--- Slide {i} ---")
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        parts.append(shape.text_frame.text)
+            text = "\n".join(parts)
+            lines = text.splitlines(keepends=True)
+            start = (start_line or 1) - 1
+            end = end_line or len(lines)
+            return {
+                "path": target,
+                "total_lines": len(lines),
+                "content": "".join(lines[start:end]),
+            }
+
         # Return raw binary for allowed mime type prefixes (e.g. image/*)
         if any(mime.startswith(prefix) for prefix in BINARY_FILE_MIME_PREFIXES):
             return Response(content=raw, media_type=mime)
