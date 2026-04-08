@@ -61,10 +61,13 @@ COPY . .
 # Create a capability-bearing Python copy for the server process only.
 # The system python3 stays clean so user-spawned Python processes remain
 # dumpable (readable via /proc/[pid]/fd/ for port detection).
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir ".[browser]" \
     && cp "$(readlink -f "$(which python3)")" /usr/local/bin/python3-ot \
     && setcap cap_setgid+ep /usr/local/bin/python3-ot \
     && sed -i "1s|.*|#!/usr/local/bin/python3-ot|" "$(which open-terminal)"
+
+# Install Playwright Chromium browser + OS dependencies
+RUN playwright install --with-deps chromium
 
 RUN useradd -m -s /bin/bash user && echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 

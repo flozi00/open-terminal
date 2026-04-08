@@ -1,11 +1,7 @@
 import asyncio
-import hmac
-from importlib.metadata import version as _pkg_version
 import fnmatch
+import hmac
 import json
-
-import aiofiles
-import aiofiles.os
 import os
 import platform
 import re
@@ -16,17 +12,48 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from importlib.metadata import version as _pkg_version
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+import aiofiles
+import aiofiles.os
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_NOTEBOOKS, ENABLE_SYSTEM_PROMPT, ENABLE_TERMINAL, EXECUTE_DESCRIPTION, EXECUTE_TIMEOUT, LOG_DIR, MAX_TERMINAL_SESSIONS, MULTI_USER, OPEN_TERMINAL_INFO, PROCESS_LOG_RETENTION, SESSION_CWD_TTL, SYSTEM_PROMPT, TERMINAL_TERM
-from open_terminal.utils.runner import PipeRunner, ProcessRunner, create_runner
+from open_terminal.env import (
+    API_KEY,
+    BINARY_FILE_MIME_PREFIXES,
+    CORS_ALLOWED_ORIGINS,
+    ENABLE_BROWSER,
+    ENABLE_NOTEBOOKS,
+    ENABLE_SYSTEM_PROMPT,
+    ENABLE_TERMINAL,
+    EXECUTE_DESCRIPTION,
+    EXECUTE_TIMEOUT,
+    LOG_DIR,
+    MAX_TERMINAL_SESSIONS,
+    MULTI_USER,
+    OPEN_TERMINAL_INFO,
+    PROCESS_LOG_RETENTION,
+    SESSION_CWD_TTL,
+    SYSTEM_PROMPT,
+    TERMINAL_TERM,
+)
 from open_terminal.utils.fs import UserFS
+from open_terminal.utils.runner import PipeRunner, ProcessRunner, create_runner
 
 if MULTI_USER:
     from open_terminal.utils.user_isolation import check_environment, resolve_user
@@ -306,8 +333,6 @@ def _set_session_cwd(session_id: str | None, path: str):
 from open_terminal.utils.log import log_process, read_log
 
 
-
-
 def _cleanup_expired():
     """Remove finished processes that have expired.
 
@@ -373,6 +398,7 @@ async def get_config():
         "features": {
             "terminal": ENABLE_TERMINAL,
             "notebooks": ENABLE_NOTEBOOKS,
+            "browser": ENABLE_BROWSER,
             "system": ENABLE_SYSTEM_PROMPT,
         },
     }
@@ -1275,6 +1301,7 @@ async def kill_process(
 
 from open_terminal.utils.port import detect_listening_ports, get_descendant_pids
 
+
 @app.get(
     "/ports",
     include_in_schema=False,
@@ -1392,6 +1419,7 @@ if ENABLE_TERMINAL:
 
     import uuid as _uuid
     from datetime import datetime as _datetime
+
     from fastapi.responses import JSONResponse
 
     try:
@@ -1773,4 +1801,17 @@ if ENABLE_NOTEBOOKS:
     from open_terminal.utils.notebooks import create_notebooks_router
 
     app.include_router(create_notebooks_router(verify_api_key))
+
+
+# ---------------------------------------------------------------------------
+# Browser automation (optional)
+# ---------------------------------------------------------------------------
+
+if ENABLE_BROWSER:
+    try:
+        from open_terminal.utils.browser import create_browser_router
+
+        app.include_router(create_browser_router(verify_api_key))
+    except ImportError:
+        pass  # playwright not installed
 

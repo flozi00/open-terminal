@@ -44,7 +44,7 @@ COPY open_terminal/ open_terminal/
 # Install the app + dependencies into /install so we can cherry-pick them.
 # ➡️  To add extra pip packages to the slim image, append them here:
 #     e.g.  pip install --no-cache-dir --prefix=/install . httpx polars
-RUN pip install --no-cache-dir --prefix=/install .
+RUN pip install --no-cache-dir --prefix=/install ".[browser]"
 
 
 # --------------------------------------------------------------------------
@@ -104,6 +104,9 @@ RUN pip install --no-cache-dir --no-deps . \
     && find /usr/local/lib/python3.12 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
     && find /usr/local/lib/python3.12 -type f -name "*.pyc" -o -name "*.pyo" -delete 2>/dev/null || true \
     && find /usr/local/lib/python3.12 -type d -name "tests" -o -name "test" | xargs rm -rf 2>/dev/null || true
+
+# Install Playwright Chromium browser + OS dependencies
+RUN playwright install --with-deps chromium
 
 # ── Non-root user ─────────────────────────────────────────────────────────
 #
