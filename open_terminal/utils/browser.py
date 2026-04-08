@@ -1,7 +1,12 @@
 """Browser automation endpoints using Playwright.
 
-Provides a session-based API for controlling a headless Chromium browser.
-Each session gets its own browser context (isolated cookies, storage, etc.).
+Provides a minimal, agent-friendly API for controlling a headless Chromium
+browser.  Tools are designed so that LLM agents never need to construct CSS
+selectors — they discover page content via text extraction and link/form
+introspection, then interact using visible labels.
+
+For edge cases not covered by the high-level tools, ``browser_evaluate``
+allows executing arbitrary JavaScript.
 
 Requires the ``browser`` optional extra::
 
@@ -9,7 +14,6 @@ Requires the ``browser`` optional extra::
 """
 
 import asyncio
-import base64
 import os
 import tempfile
 import time
@@ -55,27 +59,19 @@ async def _ensure_browser() -> Browser:
 
 
 class _Session:
-    """Wraps a Playwright browser context + active page."""
+    """Wraps a Playwright browser context + its single page."""
 
-    __slots__ = ("id", "context", "pages", "created_at", "last_used")
+    __slots__ = ("id", "context", "page", "created_at", "last_used")
 
-    def __init__(self, session_id: str, context: BrowserContext):
+    def __init__(self, session_id: str, context: BrowserContext, page: Page):
         self.id = session_id
         self.context = context
-        self.pages: dict[str, Page] = {}
+        self.page = page
         self.created_at = time.time()
         self.last_used = time.time()
 
     def touch(self):
         self.last_used = time.time()
-
-    async def get_page(self, page_id: Optional[str] = None) -> Page:
-        """Return a page by ID, or the first page if not specified."""
-        if page_id and page_id in self.pages:
-            return self.pages[page_id]
-        if not page_id and self.pages:
-            return next(iter(self.pages.values()))
-        raise KeyError("Page not found")
 
 
 _sessions: dict[str, _Session] = {}
@@ -124,81 +120,31 @@ def _get_session(session_id: str) -> _Session:
 # ---------------------------------------------------------------------------
 
 
-class CreateSessionRequest(BaseModel):
-    viewport_width: int = Field(1280, description="Browser viewport width in pixels.")
-    viewport_height: int = Field(720, description="Browser viewport height in pixels.")
-    user_agent: Optional[str] = Field(None, description="Custom User-Agent string.")
-
-
 class NavigateRequest(BaseModel):
     url: str = Field(..., description="URL to navigate to.")
     wait_until: str = Field(
         "load",
         description="When to consider navigation complete: 'load', 'domcontentloaded', 'networkidle', or 'commit'.",
     )
-    timeout: float = Field(30000, description="Navigation timeout in milliseconds.", ge=0, le=120000)
 
 
-class ClickRequest(BaseModel):
-    selector: str = Field(..., description="CSS or text selector for the element to click.")
-    button: str = Field("left", description="Mouse button: 'left', 'right', or 'middle'.")
-    click_count: int = Field(1, description="Number of clicks.", ge=1, le=3)
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class TypeRequest(BaseModel):
-    selector: str = Field(..., description="CSS selector for the input element.")
-    text: str = Field(..., description="Text to type into the element.")
-    delay: float = Field(0, description="Delay between key presses in milliseconds.", ge=0)
-    clear: bool = Field(False, description="Clear the input before typing.")
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class FillRequest(BaseModel):
-    selector: str = Field(..., description="CSS selector for the input element.")
-    value: str = Field(..., description="Value to fill into the element.")
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class SelectOptionRequest(BaseModel):
-    selector: str = Field(..., description="CSS selector for the <select> element.")
-    values: list[str] = Field(..., description="Option value(s) to select.")
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
+class FillFormRequest(BaseModel):
+    fields: dict[str, str] = Field(
+        ...,
+        description=(
+            "Map of field label/name/placeholder to value. "
+            "Example: {\"Username\": \"john\", \"Password\": \"secret\"}. "
+            "Use browser_get_form_fields to discover available fields first."
+        ),
+    )
+    submit: bool = Field(
+        False,
+        description="Press Enter on the last field after filling to submit the form.",
+    )
 
 
 class EvaluateRequest(BaseModel):
     expression: str = Field(..., description="JavaScript expression to evaluate in the page context.")
-
-
-class WaitForSelectorRequest(BaseModel):
-    selector: str = Field(..., description="CSS selector to wait for.")
-    state: str = Field(
-        "visible",
-        description="Wait for element to be 'attached', 'detached', 'visible', or 'hidden'.",
-    )
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class PressKeyRequest(BaseModel):
-    key: str = Field(
-        ...,
-        description="Key to press, e.g. 'Enter', 'Tab', 'ArrowDown', 'Control+a'.",
-    )
-    selector: Optional[str] = Field(None, description="Optional CSS selector to focus before pressing.")
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class HoverRequest(BaseModel):
-    selector: str = Field(..., description="CSS selector for the element to hover over.")
-    timeout: float = Field(30000, description="Timeout in milliseconds.", ge=0, le=120000)
-
-
-class ScrollRequest(BaseModel):
-    x: int = Field(0, description="Horizontal scroll amount in pixels.")
-    y: int = Field(0, description="Vertical scroll amount in pixels.")
-    selector: Optional[str] = Field(
-        None, description="CSS selector of scrollable element. Defaults to the page."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +167,16 @@ def create_browser_router(verify_api_key) -> APIRouter:
         "",
         operation_id="create_browser_session",
         summary="Create a browser session",
-        description="Launch a new headless browser context with its own cookies and storage. Returns a session ID.",
+        description=(
+            "Launch a new headless browser context with its own cookies and storage. "
+            "Returns a session_id to use with all other browser tools."
+        ),
     )
-    async def create_session(req: CreateSessionRequest = CreateSessionRequest()):
+    async def create_session(
+        viewport_width: int = Query(1280, description="Browser viewport width in pixels."),
+        viewport_height: int = Query(720, description="Browser viewport height in pixels."),
+        user_agent: Optional[str] = Query(None, description="Custom User-Agent string."),
+    ):
         _ensure_cleanup_task()
 
         try:
@@ -235,46 +188,20 @@ def create_browser_router(verify_api_key) -> APIRouter:
             )
 
         context_opts: dict = {
-            "viewport": {"width": req.viewport_width, "height": req.viewport_height},
+            "viewport": {"width": viewport_width, "height": viewport_height},
         }
-        if req.user_agent:
-            context_opts["user_agent"] = req.user_agent
+        if user_agent:
+            context_opts["user_agent"] = user_agent
 
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
 
         session_id = uuid.uuid4().hex[:12]
-        session = _Session(session_id, context)
-
-        page_id = uuid.uuid4().hex[:8]
-        session.pages[page_id] = page
-
+        session = _Session(session_id, context, page)
         _sessions[session_id] = session
 
         return {
-            "id": session_id,
-            "page_id": page_id,
-            "status": "ready",
-        }
-
-    @router.get(
-        "/{session_id}",
-        operation_id="get_browser_session",
-        summary="Get browser session status",
-        description="Return session info including open pages.",
-    )
-    async def get_session(session_id: str):
-        session = _get_session(session_id)
-        pages = []
-        for pid, page in session.pages.items():
-            pages.append({
-                "id": pid,
-                "url": page.url,
-                "title": await page.title(),
-            })
-        return {
-            "id": session.id,
-            "pages": pages,
+            "session_id": session_id,
             "status": "ready",
         }
 
@@ -282,41 +209,12 @@ def create_browser_router(verify_api_key) -> APIRouter:
         "/{session_id}",
         operation_id="close_browser_session",
         summary="Close a browser session",
-        description="Close all pages and release resources for this session.",
+        description="Close the browser and release all resources for this session.",
     )
     async def close_session(session_id: str):
         if session_id not in _sessions:
             raise HTTPException(status_code=404, detail="Browser session not found")
         await _destroy_session(session_id)
-        return {"status": "closed"}
-
-    # -- Page management ----------------------------------------------------
-
-    @router.post(
-        "/{session_id}/pages",
-        operation_id="create_browser_page",
-        summary="Open a new page (tab)",
-        description="Create a new page in the browser session. Returns the page ID.",
-    )
-    async def create_page(session_id: str):
-        session = _get_session(session_id)
-        page = await session.context.new_page()
-        page_id = uuid.uuid4().hex[:8]
-        session.pages[page_id] = page
-        return {"page_id": page_id, "url": page.url}
-
-    @router.delete(
-        "/{session_id}/pages/{page_id}",
-        operation_id="close_browser_page",
-        summary="Close a page (tab)",
-        description="Close a specific page within the browser session.",
-    )
-    async def close_page(session_id: str, page_id: str):
-        session = _get_session(session_id)
-        page = session.pages.pop(page_id, None)
-        if not page:
-            raise HTTPException(status_code=404, detail="Page not found")
-        await page.close()
         return {"status": "closed"}
 
     # -- Navigation ---------------------------------------------------------
@@ -325,21 +223,17 @@ def create_browser_router(verify_api_key) -> APIRouter:
         "/{session_id}/navigate",
         operation_id="browser_navigate",
         summary="Navigate to a URL",
-        description="Navigate a page to the specified URL and wait for it to load.",
+        description=(
+            "Navigate to the specified URL and wait for the page to load. "
+            "After navigating, use browser_get_text to read content or browser_get_links to discover links."
+        ),
     )
-    async def navigate(session_id: str, req: NavigateRequest, page_id: Optional[str] = Query(None)):
+    async def navigate(session_id: str, req: NavigateRequest):
         session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
+        page = session.page
 
         try:
-            response = await page.goto(
-                req.url,
-                wait_until=req.wait_until,
-                timeout=req.timeout,
-            )
+            response = await page.goto(req.url, wait_until=req.wait_until, timeout=30000)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -349,283 +243,20 @@ def create_browser_router(verify_api_key) -> APIRouter:
             "status": response.status if response else None,
         }
 
-    @router.post(
-        "/{session_id}/back",
-        operation_id="browser_go_back",
-        summary="Go back",
-        description="Navigate the page back in history.",
-    )
-    async def go_back(session_id: str, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-        await page.go_back()
-        return {"url": page.url, "title": await page.title()}
-
-    @router.post(
-        "/{session_id}/forward",
-        operation_id="browser_go_forward",
-        summary="Go forward",
-        description="Navigate the page forward in history.",
-    )
-    async def go_forward(session_id: str, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-        await page.go_forward()
-        return {"url": page.url, "title": await page.title()}
-
-    @router.post(
-        "/{session_id}/reload",
-        operation_id="browser_reload",
-        summary="Reload the page",
-        description="Reload the current page.",
-    )
-    async def reload(session_id: str, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-        await page.reload()
-        return {"url": page.url, "title": await page.title()}
-
-    # -- Interaction --------------------------------------------------------
-
-    @router.post(
-        "/{session_id}/click",
-        operation_id="browser_click",
-        summary="Click an element",
-        description="Click on an element matching the given selector.",
-    )
-    async def click(session_id: str, req: ClickRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            await page.click(
-                req.selector,
-                button=req.button,
-                click_count=req.click_count,
-                timeout=req.timeout,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok", "url": page.url}
-
-    @router.post(
-        "/{session_id}/type",
-        operation_id="browser_type",
-        summary="Type text into an element",
-        description="Type text into an input element character by character. Use fill for instant value setting.",
-    )
-    async def type_text(session_id: str, req: TypeRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            if req.clear:
-                await page.fill(req.selector, "", timeout=req.timeout)
-            await page.type(req.selector, req.text, delay=req.delay, timeout=req.timeout)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok"}
-
-    @router.post(
-        "/{session_id}/fill",
-        operation_id="browser_fill",
-        summary="Fill an input element",
-        description="Set the value of an input element instantly (clears existing value first).",
-    )
-    async def fill(session_id: str, req: FillRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            await page.fill(req.selector, req.value, timeout=req.timeout)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok"}
-
-    @router.post(
-        "/{session_id}/select",
-        operation_id="browser_select_option",
-        summary="Select dropdown option(s)",
-        description="Select one or more options in a <select> element by value.",
-    )
-    async def select_option(session_id: str, req: SelectOptionRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            selected = await page.select_option(req.selector, req.values, timeout=req.timeout)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"selected": selected}
-
-    @router.post(
-        "/{session_id}/hover",
-        operation_id="browser_hover",
-        summary="Hover over an element",
-        description="Move the mouse over an element matching the selector.",
-    )
-    async def hover(session_id: str, req: HoverRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            await page.hover(req.selector, timeout=req.timeout)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok"}
-
-    @router.post(
-        "/{session_id}/press",
-        operation_id="browser_press_key",
-        summary="Press a keyboard key",
-        description="Press a key or key combination (e.g. 'Enter', 'Control+a').",
-    )
-    async def press_key(session_id: str, req: PressKeyRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            if req.selector:
-                await page.press(req.selector, req.key, timeout=req.timeout)
-            else:
-                await page.keyboard.press(req.key)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok"}
-
-    @router.post(
-        "/{session_id}/scroll",
-        operation_id="browser_scroll",
-        summary="Scroll the page or an element",
-        description="Scroll by the specified pixel amounts. Positive y scrolls down.",
-    )
-    async def scroll(session_id: str, req: ScrollRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        if req.selector:
-            await page.eval_on_selector(
-                req.selector,
-                f"el => el.scrollBy({req.x}, {req.y})",
-            )
-        else:
-            await page.evaluate(f"window.scrollBy({req.x}, {req.y})")
-
-        return {"status": "ok"}
-
-    @router.post(
-        "/{session_id}/wait",
-        operation_id="browser_wait_for_selector",
-        summary="Wait for an element",
-        description="Wait until an element matching the selector reaches the desired state.",
-    )
-    async def wait_for_selector(
-        session_id: str, req: WaitForSelectorRequest, page_id: Optional[str] = Query(None)
-    ):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            await page.wait_for_selector(req.selector, state=req.state, timeout=req.timeout)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"status": "ok", "selector": req.selector, "state": req.state}
-
-    # -- Content extraction -------------------------------------------------
-
-    @router.post(
-        "/{session_id}/evaluate",
-        operation_id="browser_evaluate",
-        summary="Evaluate JavaScript",
-        description="Execute a JavaScript expression in the page and return the result.",
-    )
-    async def evaluate(session_id: str, req: EvaluateRequest, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            result = await page.evaluate(req.expression)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {"result": result}
-
-    @router.get(
-        "/{session_id}/content",
-        operation_id="browser_get_content",
-        summary="Get page HTML content",
-        description="Return the full HTML content of the page.",
-    )
-    async def get_content(session_id: str, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        content = await page.content()
-        return {
-            "url": page.url,
-            "title": await page.title(),
-            "content": content,
-        }
+    # -- Content reading ----------------------------------------------------
 
     @router.get(
         "/{session_id}/text",
         operation_id="browser_get_text",
         summary="Get page text content",
-        description="Return the visible text content of the page (strips HTML tags). Useful for reading page content without markup.",
+        description=(
+            "Return the visible text of the page (no HTML). "
+            "This is the primary way to read page content."
+        ),
     )
-    async def get_text(session_id: str, page_id: Optional[str] = Query(None)):
+    async def get_text(session_id: str):
         session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
+        page = session.page
         text = await page.evaluate("() => document.body.innerText")
         return {
             "url": page.url,
@@ -634,96 +265,24 @@ def create_browser_router(verify_api_key) -> APIRouter:
         }
 
     @router.get(
-        "/{session_id}/screenshot",
-        operation_id="browser_screenshot",
-        summary="Take a screenshot",
-        description=(
-            "Capture a screenshot of the page and save it to a PNG file. "
-            "Returns the file path. Use display_file to show the screenshot to the user."
-        ),
-    )
-    async def screenshot(
-        session_id: str,
-        page_id: Optional[str] = Query(None),
-        full_page: bool = Query(False, description="Capture the full scrollable page."),
-        selector: Optional[str] = Query(None, description="CSS selector to screenshot a specific element."),
-    ):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            screenshot_dir = os.path.join(tempfile.gettempdir(), "open-terminal-screenshots")
-            os.makedirs(screenshot_dir, exist_ok=True)
-            filename = f"screenshot_{session_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
-            filepath = os.path.join(screenshot_dir, filename)
-
-            if selector:
-                element = await page.query_selector(selector)
-                if not element:
-                    raise HTTPException(status_code=404, detail="Element not found")
-                await element.screenshot(type="png", path=filepath)
-            else:
-                await page.screenshot(type="png", full_page=full_page, path=filepath)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {
-            "url": page.url,
-            "path": filepath,
-            "format": "png",
-        }
-
-    @router.get(
-        "/{session_id}/pdf",
-        operation_id="browser_pdf",
-        summary="Generate PDF",
-        description="Generate a PDF of the current page. Returns base64-encoded PDF data.",
-    )
-    async def generate_pdf(session_id: str, page_id: Optional[str] = Query(None)):
-        session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
-
-        try:
-            raw = await page.pdf()
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        return {
-            "url": page.url,
-            "data": base64.b64encode(raw).decode("ascii"),
-            "format": "pdf",
-        }
-
-    # -- Link extraction & text-based click --------------------------------
-
-    @router.get(
         "/{session_id}/links",
         operation_id="browser_get_links",
         summary="Get all links on the page",
         description=(
-            "Extract all clickable links (<a> tags) from the page with their visible text and href. "
+            "Extract all clickable links from the page with their visible text and URL. "
             "Use this to discover navigation targets instead of guessing URLs. "
-            "Then use browser_click_link to click a link by its text, or browser_navigate with the href."
+            "Then use browser_click_link to click by text, or browser_navigate with the URL."
         ),
     )
     async def get_links(
         session_id: str,
-        page_id: Optional[str] = Query(None),
-        selector: Optional[str] = Query(None, description="Optional CSS selector to scope the link search (e.g. 'nav', '#sidebar')."),
+        selector: Optional[str] = Query(
+            None,
+            description="Optional CSS selector to scope the search (e.g. 'nav', '#sidebar').",
+        ),
     ):
         session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
+        page = session.page
 
         js = """
         (scope) => {
@@ -754,32 +313,103 @@ def create_browser_router(verify_api_key) -> APIRouter:
             "links": links,
         }
 
+    @router.get(
+        "/{session_id}/form_fields",
+        operation_id="browser_get_form_fields",
+        summary="Get all form fields on the page",
+        description=(
+            "Discover all fillable form fields (inputs, textareas, selects) with their "
+            "labels, types, placeholders, and current values. "
+            "Use this before browser_fill_form to know what fields are available."
+        ),
+    )
+    async def get_form_fields(session_id: str):
+        session = _get_session(session_id)
+        page = session.page
+
+        js = """
+        () => {
+            const fields = [];
+            const inputs = document.querySelectorAll(
+                'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea, select'
+            );
+            for (const el of inputs) {
+                const id = el.id;
+                const name = el.name;
+                const type = el.type || el.tagName.toLowerCase();
+                const placeholder = el.placeholder || '';
+                const value = el.value || '';
+                const ariaLabel = el.getAttribute('aria-label') || '';
+
+                // Find associated label
+                let label = '';
+                if (id) {
+                    const labelEl = document.querySelector(`label[for="${id}"]`);
+                    if (labelEl) label = labelEl.innerText.trim();
+                }
+                if (!label) {
+                    const parent = el.closest('label');
+                    if (parent) label = parent.innerText.trim();
+                }
+
+                // For <select>, collect options
+                let options = [];
+                if (el.tagName === 'SELECT') {
+                    options = Array.from(el.options).map(o => ({
+                        value: o.value,
+                        text: o.text.trim(),
+                        selected: o.selected,
+                    }));
+                }
+
+                // Best human-readable identifier for the field
+                const identifier = label || ariaLabel || placeholder || name || id || '';
+
+                fields.push({
+                    identifier,
+                    type,
+                    name: name || '',
+                    placeholder,
+                    value,
+                    options: options.length ? options : undefined,
+                    required: el.required || false,
+                });
+            }
+            return fields;
+        }
+        """
+        try:
+            fields = await page.evaluate(js)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {
+            "url": page.url,
+            "count": len(fields),
+            "fields": fields,
+        }
+
+    # -- Interaction --------------------------------------------------------
+
     @router.post(
         "/{session_id}/click_link",
         operation_id="browser_click_link",
         summary="Click a link by its visible text",
         description=(
-            "Click the first link whose visible text contains the given string (case-insensitive). "
-            "Much easier than constructing CSS selectors. Use browser_get_links first to see available links."
+            "Click the first link whose visible text matches the given string (case-insensitive). "
+            "Use browser_get_links first to see available link texts."
         ),
     )
     async def click_link(
         session_id: str,
-        text: str = Query(..., description="Text (or substring) of the link to click. Case-insensitive match."),
-        page_id: Optional[str] = Query(None),
-        timeout: float = Query(30000, description="Timeout in milliseconds.", ge=0, le=120000),
+        text: str = Query(..., description="Text (or substring) of the link to click."),
     ):
         session = _get_session(session_id)
-        try:
-            page = await session.get_page(page_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Page not found")
+        page = session.page
 
         try:
-            # Use Playwright's text selector for robust matching
             link = page.get_by_role("link", name=text)
-            first_link = link.first
-            await first_link.click(timeout=timeout)
+            await link.first.click(timeout=30000)
         except Exception as e:
             raise HTTPException(
                 status_code=400,
@@ -793,28 +423,150 @@ def create_browser_router(verify_api_key) -> APIRouter:
             "title": await page.title(),
         }
 
-    # -- Cookie management --------------------------------------------------
+    @router.post(
+        "/{session_id}/click_button",
+        operation_id="browser_click_button",
+        summary="Click a button by its visible text",
+        description=(
+            "Click the first button whose visible text matches the given string (case-insensitive). "
+            "Works for <button> elements and input[type=submit]."
+        ),
+    )
+    async def click_button(
+        session_id: str,
+        text: str = Query(..., description="Text (or substring) of the button to click."),
+    ):
+        session = _get_session(session_id)
+        page = session.page
+
+        try:
+            button = page.get_by_role("button", name=text)
+            await button.first.click(timeout=30000)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not find or click button with text '{text}': {e}",
+            )
+
+        await page.wait_for_load_state("load")
+        return {
+            "status": "ok",
+            "url": page.url,
+            "title": await page.title(),
+        }
+
+    @router.post(
+        "/{session_id}/fill_form",
+        operation_id="browser_fill_form",
+        summary="Fill form fields by label",
+        description=(
+            "Fill one or more form fields using their label, placeholder, or name as keys. "
+            "Use browser_get_form_fields first to discover available fields. "
+            "Set submit=true to press Enter after filling to submit the form."
+        ),
+    )
+    async def fill_form(session_id: str, req: FillFormRequest):
+        session = _get_session(session_id)
+        page = session.page
+
+        filled = []
+        last_locator = None
+
+        for label, value in req.fields.items():
+            try:
+                # Try label association first, then placeholder, then aria-label
+                locator = page.get_by_label(label)
+                count = await locator.count()
+                if count == 0:
+                    locator = page.get_by_placeholder(label)
+                    count = await locator.count()
+                if count == 0:
+                    # Fall back to name attribute
+                    locator = page.locator(f'[name="{label}"]')
+                    count = await locator.count()
+                if count == 0:
+                    raise Exception(f"No field found matching '{label}'")
+
+                target = locator.first
+                tag = await target.evaluate("el => el.tagName")
+                if tag == "SELECT":
+                    await target.select_option(label=value, timeout=10000)
+                else:
+                    await target.fill(value, timeout=10000)
+                last_locator = target
+                filled.append(label)
+            except Exception as e:
+                return {
+                    "status": "partial",
+                    "filled": filled,
+                    "error": f"Failed on field '{label}': {e}",
+                }
+
+        if req.submit and last_locator:
+            await last_locator.press("Enter")
+            await page.wait_for_load_state("load")
+
+        return {
+            "status": "ok",
+            "filled": filled,
+            "url": page.url,
+            "title": await page.title(),
+        }
+
+    # -- Screenshot ---------------------------------------------------------
 
     @router.get(
-        "/{session_id}/cookies",
-        operation_id="browser_get_cookies",
-        summary="Get cookies",
-        description="Return all cookies in the browser context.",
+        "/{session_id}/screenshot",
+        operation_id="browser_screenshot",
+        summary="Take a screenshot",
+        description=(
+            "Capture a screenshot of the current page and save it to a file. "
+            "Returns the file path. Use display_file to show it to the user."
+        ),
     )
-    async def get_cookies(session_id: str):
+    async def screenshot(
+        session_id: str,
+        full_page: bool = Query(False, description="Capture the full scrollable page."),
+    ):
         session = _get_session(session_id)
-        cookies = await session.context.cookies()
-        return {"cookies": cookies}
+        page = session.page
 
-    @router.delete(
-        "/{session_id}/cookies",
-        operation_id="browser_clear_cookies",
-        summary="Clear cookies",
-        description="Remove all cookies from the browser context.",
+        try:
+            screenshot_dir = os.path.join(tempfile.gettempdir(), "open-terminal-screenshots")
+            os.makedirs(screenshot_dir, exist_ok=True)
+            filename = f"screenshot_{session_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
+            filepath = os.path.join(screenshot_dir, filename)
+            await page.screenshot(type="png", full_page=full_page, path=filepath)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {
+            "url": page.url,
+            "path": filepath,
+            "format": "png",
+        }
+
+    # -- Escape hatch -------------------------------------------------------
+
+    @router.post(
+        "/{session_id}/evaluate",
+        operation_id="browser_evaluate",
+        summary="Evaluate JavaScript",
+        description=(
+            "Execute a JavaScript expression in the page and return the result. "
+            "This is an escape hatch for advanced interactions not covered by other tools "
+            "(e.g. scrolling, pressing keys, interacting with custom widgets)."
+        ),
     )
-    async def clear_cookies(session_id: str):
+    async def evaluate(session_id: str, req: EvaluateRequest):
         session = _get_session(session_id)
-        await session.context.clear_cookies()
-        return {"status": "ok"}
+        page = session.page
+
+        try:
+            result = await page.evaluate(req.expression)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {"result": result}
 
     return router
