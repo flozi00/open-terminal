@@ -389,6 +389,50 @@ def create_browser_router(verify_api_key) -> APIRouter:
             "fields": fields,
         }
 
+    @router.get(
+        "/{session_id}/buttons",
+        operation_id="browser_get_buttons",
+        summary="Get all buttons on the page",
+        description=(
+            "Discover all clickable buttons on the page with their visible text. "
+            "Use this before browser_click_button to know what buttons are available."
+        ),
+    )
+    async def get_buttons(session_id: str):
+        session = _get_session(session_id)
+        page = session.page
+
+        js = """
+        () => {
+            const results = [];
+            const seen = new Set();
+            const els = document.querySelectorAll(
+                'button, input[type="submit"], input[type="button"], input[type="reset"], [role="button"]'
+            );
+            for (const el of els) {
+                const text = (
+                    el.innerText || el.value || el.getAttribute('aria-label') || ''
+                ).trim().substring(0, 200);
+                if (!text || seen.has(text)) continue;
+                seen.add(text);
+                const type = el.type || el.tagName.toLowerCase();
+                const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                results.push({text, type, disabled});
+            }
+            return results;
+        }
+        """
+        try:
+            buttons = await page.evaluate(js)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {
+            "url": page.url,
+            "count": len(buttons),
+            "buttons": buttons,
+        }
+
     # -- Interaction --------------------------------------------------------
 
     @router.post(
