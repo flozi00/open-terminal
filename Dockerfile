@@ -14,15 +14,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Version control
     git \
     # Build tools
-    build-essential cmake make \
+    build-essential cmake make pkg-config \
     # Scripting & languages
     perl ruby-full lua5.4 \
+    # Python system packages
+    python3-dev python3-venv \
     # Data processing
     jq xmlstarlet sqlite3 \
     # Media & documents
     ffmpeg pandoc imagemagick texlive-latex-base \
     # Compression
     zip unzip tar gzip bzip2 xz-utils zstd p7zip-full \
+    # Search tools
+    ripgrep fd-find \
+    # Fun
+    cowsay figlet \
     # System
     procps htop lsof strace sysstat \
     sudo tmux screen tini iptables ipset dnsmasq \
@@ -48,14 +54,17 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     numpy pandas scipy scikit-learn \
+    polars pyarrow \
     matplotlib seaborn plotly \
-    jupyter ipython \
-    requests beautifulsoup4 lxml \
+    jupyterlab notebook ipython ipykernel \
+    httpx requests beautifulsoup4 lxml \
     sqlalchemy psycopg2-binary \
     pyyaml toml jsonlines \
-    tqdm rich \
+    tqdm rich sympy \
+    pillow opencv-python \
     openpyxl weasyprint \
-    python-docx python-pptx pypdf csvkit
+    python-docx python-pptx pypdf csvkit \
+    pytest ruff black mypy
 
 COPY . .
 # Create a capability-bearing Python copy for the server process only.
