@@ -10,6 +10,8 @@ Requires the ``browser`` optional extra::
 
 import asyncio
 import base64
+import os
+import tempfile
 import time
 import uuid
 from typing import Optional
@@ -635,7 +637,10 @@ def create_browser_router(verify_api_key) -> APIRouter:
         "/{session_id}/screenshot",
         operation_id="browser_screenshot",
         summary="Take a screenshot",
-        description="Capture a screenshot of the page as a base64-encoded PNG.",
+        description=(
+            "Capture a screenshot of the page and save it to a PNG file. "
+            "Returns the file path. Use display_file to show the screenshot to the user."
+        ),
     )
     async def screenshot(
         session_id: str,
@@ -650,13 +655,18 @@ def create_browser_router(verify_api_key) -> APIRouter:
             raise HTTPException(status_code=404, detail="Page not found")
 
         try:
+            screenshot_dir = os.path.join(tempfile.gettempdir(), "open-terminal-screenshots")
+            os.makedirs(screenshot_dir, exist_ok=True)
+            filename = f"screenshot_{session_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
+            filepath = os.path.join(screenshot_dir, filename)
+
             if selector:
                 element = await page.query_selector(selector)
                 if not element:
                     raise HTTPException(status_code=404, detail="Element not found")
-                raw = await element.screenshot(type="png")
+                await element.screenshot(type="png", path=filepath)
             else:
-                raw = await page.screenshot(type="png", full_page=full_page)
+                await page.screenshot(type="png", full_page=full_page, path=filepath)
         except HTTPException:
             raise
         except Exception as e:
@@ -664,7 +674,7 @@ def create_browser_router(verify_api_key) -> APIRouter:
 
         return {
             "url": page.url,
-            "image": base64.b64encode(raw).decode("ascii"),
+            "path": filepath,
             "format": "png",
         }
 
@@ -690,6 +700,97 @@ def create_browser_router(verify_api_key) -> APIRouter:
             "url": page.url,
             "data": base64.b64encode(raw).decode("ascii"),
             "format": "pdf",
+        }
+
+    # -- Link extraction & text-based click --------------------------------
+
+    @router.get(
+        "/{session_id}/links",
+        operation_id="browser_get_links",
+        summary="Get all links on the page",
+        description=(
+            "Extract all clickable links (<a> tags) from the page with their visible text and href. "
+            "Use this to discover navigation targets instead of guessing URLs. "
+            "Then use browser_click_link to click a link by its text, or browser_navigate with the href."
+        ),
+    )
+    async def get_links(
+        session_id: str,
+        page_id: Optional[str] = Query(None),
+        selector: Optional[str] = Query(None, description="Optional CSS selector to scope the link search (e.g. 'nav', '#sidebar')."),
+    ):
+        session = _get_session(session_id)
+        try:
+            page = await session.get_page(page_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Page not found")
+
+        js = """
+        (scope) => {
+            const root = scope ? document.querySelector(scope) : document;
+            if (!root) return [];
+            const anchors = root.querySelectorAll('a[href]');
+            const seen = new Set();
+            const results = [];
+            for (const a of anchors) {
+                const text = a.innerText.trim().substring(0, 200);
+                const href = a.href;
+                const key = text + '|' + href;
+                if (!text || seen.has(key)) continue;
+                seen.add(key);
+                results.push({text, href});
+            }
+            return results;
+        }
+        """
+        try:
+            links = await page.evaluate(js, selector)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {
+            "url": page.url,
+            "count": len(links),
+            "links": links,
+        }
+
+    @router.post(
+        "/{session_id}/click_link",
+        operation_id="browser_click_link",
+        summary="Click a link by its visible text",
+        description=(
+            "Click the first link whose visible text contains the given string (case-insensitive). "
+            "Much easier than constructing CSS selectors. Use browser_get_links first to see available links."
+        ),
+    )
+    async def click_link(
+        session_id: str,
+        text: str = Query(..., description="Text (or substring) of the link to click. Case-insensitive match."),
+        page_id: Optional[str] = Query(None),
+        timeout: float = Query(30000, description="Timeout in milliseconds.", ge=0, le=120000),
+    ):
+        session = _get_session(session_id)
+        try:
+            page = await session.get_page(page_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Page not found")
+
+        try:
+            # Use Playwright's text selector for robust matching
+            link = page.get_by_role("link", name=text)
+            first_link = link.first
+            await first_link.click(timeout=timeout)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not find or click link with text '{text}': {e}",
+            )
+
+        await page.wait_for_load_state("load")
+        return {
+            "status": "ok",
+            "url": page.url,
+            "title": await page.title(),
         }
 
     # -- Cookie management --------------------------------------------------

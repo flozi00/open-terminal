@@ -109,6 +109,14 @@ def get_system_prompt() -> str:
         "If a command produces no output, that typically means it succeeded."
     )
 
+    if ENABLE_BROWSER:
+        prompt += (
+            "\n\nYou also have browser automation tools available. "
+            "You can create browser sessions, navigate to URLs, click elements, type text, "
+            "fill forms, take screenshots, extract page content, evaluate JavaScript, and more. "
+            "Use the browser tools to interact with web pages when needed."
+        )
+
     if OPEN_TERMINAL_INFO:
         prompt += f"\n\n{OPEN_TERMINAL_INFO}"
 
