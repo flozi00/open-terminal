@@ -201,3 +201,4 @@ Full interactive API documentation is available at [http://localhost:8000/docs](
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
