@@ -43,8 +43,7 @@ RUN apk add --no-cache \
         gcc \
         musl-dev \
         libffi-dev \
-        cargo \
-        rust
+        curl
 
 COPY pyproject.toml README.md uv.lock* ./
 COPY open_terminal/ open_terminal/
@@ -54,7 +53,18 @@ COPY open_terminal/ open_terminal/
 #     e.g.  pip install --no-cache-dir --prefix=/install . httpx polars
 RUN pip install --no-cache-dir --prefix=/install .
 
-RUN cargo install --git https://github.com/rtk-ai/rtk --tag "v${RTK_VERSION}" --root /install rtk
+RUN set -eux; \
+    arch="$(apk --print-arch)"; \
+    if [ "$arch" = "x86_64" ]; then \
+        mkdir -p /install/bin; \
+        curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" -o /tmp/rtk.tar.gz; \
+        tar -xzf /tmp/rtk.tar.gz -C /install/bin rtk; \
+        chmod +x /install/bin/rtk; \
+        rm -f /tmp/rtk.tar.gz; \
+    else \
+        apk add --no-cache cargo rust; \
+        cargo install --git https://github.com/rtk-ai/rtk --tag "v${RTK_VERSION}" --root /install rtk; \
+    fi
 
 
 # --------------------------------------------------------------------------
