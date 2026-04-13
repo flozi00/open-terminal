@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.34] - 2026-04-08
+
+### Added
+
+- 🌐 **Path-based file serving** — new `GET /files/serve/{path}` endpoint enables HTML files loaded in iframes to resolve relative CSS, JS, and image references to sibling files. Used by Open WebUI's FileNav to render multi-file websites.
+
+## [0.11.33] - 2026-04-08
+
+### Fixed
+
+- `grep_search` now defaults to regex mode, matching actual grep behaviour. Patterns like `foo|bar` and `err.*timeout` work as expected without needing to set `regex=true` explicitly.
+
 ## [0.11.32] - 2026-03-30
 
 ### Changed
