@@ -1364,7 +1364,9 @@ async def list_ports(request: Request):
 
             is_descendant = pid is not None and pid in descendant_pids
             is_same_user_fallback = (
-                uid == own_uid
+                not is_descendant
+                and uid is not None
+                and uid == own_uid
                 and pid != own_pid
                 and (request_port is None or port != request_port)
             )
