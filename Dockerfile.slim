@@ -27,6 +27,8 @@
 # --------------------------------------------------------------------------
 FROM python:3.12.13-slim AS builder
 
+ARG RTK_VERSION=0.35.0
+
 WORKDIR /src
 
 # Build-time system dependencies.
@@ -80,6 +82,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcap2-bin \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) rtk_target="x86_64-unknown-linux-musl" ;; \
+        arm64) rtk_target="aarch64-unknown-linux-gnu" ;; \
+        *) echo "Unsupported architecture for RTK: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${rtk_target}.tar.gz" -o /tmp/rtk.tar.gz; \
+    tar -xzf /tmp/rtk.tar.gz -C /usr/local/bin rtk; \
+    chmod +x /usr/local/bin/rtk; \
+    rm -f /tmp/rtk.tar.gz
 
 # Copy the pre-built Python packages from the builder stage.
 COPY --from=builder /install /usr/local

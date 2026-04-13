@@ -8,7 +8,7 @@ AI assistants are great at writing code, but they need somewhere to *run* it. Op
 
 You can run it two ways:
 
-- **Docker (sandboxed)** — runs in an isolated container with a full toolkit pre-installed: Python, Node.js, git, build tools, data science libraries, ffmpeg, and more. Great for giving AI agents a safe playground without touching your host system.
+- **Docker (sandboxed)** — runs in an isolated container with a full toolkit pre-installed: Python, Node.js, git, RTK, build tools, data science libraries, ffmpeg, and more. Great for giving AI agents a safe playground without touching your host system.
 - **Bare metal** — install it with `pip` and run it anywhere Python runs. Commands run directly on your machine with access to your real files, your real tools, and your real environment, perfect for local development, personal automation, or giving an AI assistant full access to your actual projects.
 
 ## Getting Started
@@ -30,7 +30,7 @@ That's it — you're up and running at `http://localhost:8000`.
 |---|---|---|---|
 | **Best for** | AI agent sandboxes | Production / hardened | Edge / CI / minimal footprint |
 | **Size** | ~4 GB | ~430 MB | ~230 MB |
-| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, data science libs | git, curl, jq | git, curl, jq |
+| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, RTK, data science libs | git, curl, jq, RTK | git, curl, jq, RTK |
 | **Install packages at runtime** | ✔ (has `sudo`) | ✘ | ✘ |
 | **Multi-user mode** | ✔ | ✘ | ✘ |
 | **Egress firewall** | ✔ | ✔ | ✔ |
@@ -201,4 +201,3 @@ Full interactive API documentation is available at [http://localhost:8000/docs](
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
-

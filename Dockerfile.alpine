@@ -31,6 +31,8 @@
 # --------------------------------------------------------------------------
 FROM python:3.12.13-alpine AS builder
 
+ARG RTK_VERSION=0.35.0
+
 WORKDIR /src
 
 # Build-time system dependencies.
@@ -40,7 +42,8 @@ RUN apk add --no-cache \
         build-base \
         gcc \
         musl-dev \
-        libffi-dev
+        libffi-dev \
+        curl
 
 COPY pyproject.toml README.md uv.lock* ./
 COPY open_terminal/ open_terminal/
@@ -49,6 +52,19 @@ COPY open_terminal/ open_terminal/
 # ➡️  To add extra pip packages to the alpine image, append them here:
 #     e.g.  pip install --no-cache-dir --prefix=/install . httpx polars
 RUN pip install --no-cache-dir --prefix=/install .
+
+RUN set -eux; \
+    arch="$(apk --print-arch)"; \
+    if [ "$arch" = "x86_64" ]; then \
+        mkdir -p /install/bin; \
+        curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" -o /tmp/rtk.tar.gz; \
+        tar -xzf /tmp/rtk.tar.gz -C /install/bin rtk; \
+        chmod +x /install/bin/rtk; \
+        rm -f /tmp/rtk.tar.gz; \
+    else \
+        apk add --no-cache cargo rust; \
+        cargo install --git https://github.com/rtk-ai/rtk --tag "v${RTK_VERSION}" --root /install rtk; \
+    fi
 
 
 # --------------------------------------------------------------------------

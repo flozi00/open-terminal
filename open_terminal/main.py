@@ -1329,7 +1329,9 @@ async def list_ports(request: Request):
     """Return TCP ports currently listening on localhost.
 
     In multi-user mode, only shows ports owned by the requesting user.
-    In single-user mode, shows ports owned by descendant processes.
+    In single-user mode, prefers descendant processes and falls back to
+    same-user ports when PID-based attribution is unavailable (for example,
+    detached processes or restricted /proc metadata).
     """
     all_ports = await asyncio.to_thread(detect_listening_ports)
 
@@ -1350,8 +1352,29 @@ async def list_ports(request: Request):
             all_ports = []
     else:
         own_pid = os.getpid()
+        own_uid = os.getuid()
+        request_port = request.url.port
         descendant_pids = await asyncio.to_thread(get_descendant_pids, own_pid)
-        all_ports = [p for p in all_ports if p.get("pid") in descendant_pids]
+        scoped_ports = []
+        seen_ports = set()
+        for port_info in all_ports:
+            port = port_info.get("port")
+            pid = port_info.get("pid")
+            uid = port_info.get("uid")
+
+            is_descendant = pid is not None and pid in descendant_pids
+            is_same_user_fallback = (
+                not is_descendant
+                and uid is not None
+                and uid == own_uid
+                and pid != own_pid
+                and (request_port is None or port != request_port)
+            )
+
+            if (is_descendant or is_same_user_fallback) and port not in seen_ports:
+                scoped_ports.append(port_info)
+                seen_ports.add(port)
+        all_ports = scoped_ports
 
     # Strip uid from response (internal detail)
     for p in all_ports:
@@ -1832,4 +1855,3 @@ if ENABLE_BROWSER:
         app.include_router(create_browser_router(verify_api_key))
     except ImportError:
         pass  # playwright not installed
-
