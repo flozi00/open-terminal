@@ -102,7 +102,7 @@ def get_system_prompt() -> str:
         f"You have access to a computer running {platform.system()} {platform.release()} ({platform.machine()}) "
         f'on host "{socket.gethostname()}"{user_part} with {shell}. '
         f"Python {sys.version.split()[0]} is available.\n\n"
-        "Use your tools to directly interact with the system \u2014 run commands, read and write files, "
+        "Use your tools to directly interact with the system \u2014 run commands, read, write, and append files, "
         "and search the filesystem. "
         "Prefer verifying the current state before making changes. "
         "When running commands, check the output to confirm success. "
@@ -225,6 +225,17 @@ class WriteRequest(BaseModel):
     content: str = Field(
         ...,
         description="Text content to write to the file.",
+    )
+
+
+class AppendRequest(BaseModel):
+    path: str = Field(
+        ...,
+        description="Absolute or relative path to append to. Parent directories are created automatically.",
+    )
+    content: str = Field(
+        ...,
+        description="Text content to append to the file.",
     )
 
 
@@ -654,6 +665,27 @@ async def write_file(http_request: Request, request: WriteRequest, fs: UserFS = 
     target = fs.resolve_path(request.path, cwd=session_cwd)
     try:
         await fs.write(target, request.content)
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"path": target, "size": len(request.content.encode())}
+
+
+@app.post(
+    "/files/append",
+    operation_id="append_file",
+    summary="Append to a file",
+    description="Append text content to a file. Creates parent directories automatically and creates the file if it does not exist.",
+    dependencies=[Depends(verify_api_key)],
+    responses={
+        401: {"description": "Invalid or missing API key."},
+    },
+)
+async def append_file(http_request: Request, request: AppendRequest, fs: UserFS = Depends(get_filesystem)):
+    session_id = http_request.headers.get("x-session-id")
+    session_cwd = _get_session_cwd(session_id, fs) if session_id else None
+    target = fs.resolve_path(request.path, cwd=session_cwd)
+    try:
+        await fs.append(target, request.content)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"path": target, "size": len(request.content.encode())}
