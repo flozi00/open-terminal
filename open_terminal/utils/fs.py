@@ -241,6 +241,16 @@ class UserFS:
             await f.write(content)
         await self._chown(path)
 
+    async def append(self, path: str, content: str, encoding: str = "utf-8") -> None:
+        """Append text *content* to *path*, creating parent dirs."""
+        self._check_path(path)
+        parent = os.path.dirname(path)
+        if parent:
+            await self._ensure_parents(parent)
+        async with aiofiles.open(path, "a", encoding=encoding) as f:
+            await f.write(content)
+        await self._chown(path)
+
     async def write_bytes(self, path: str, data: bytes) -> None:
         """Write raw *data* to *path*, creating parent dirs."""
         self._check_path(path)
