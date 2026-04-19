@@ -674,7 +674,7 @@ async def write_file(http_request: Request, request: WriteRequest, fs: UserFS = 
     "/files/append",
     operation_id="append_file",
     summary="Append to a file",
-    description="Append text content to a file. Creates parent directories automatically and creates the file if it does not exist.",
+    description="Append text content to a file. Creates parent directories automatically and creates the file if it does not exist. Returns both the appended byte count and the resulting file size.",
     dependencies=[Depends(verify_api_key)],
     responses={
         401: {"description": "Invalid or missing API key."},
@@ -686,9 +686,14 @@ async def append_file(http_request: Request, request: AppendRequest, fs: UserFS 
     target = fs.resolve_path(request.path, cwd=session_cwd)
     try:
         await fs.append(target, request.content)
+        stat = await fs.stat(target)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"path": target, "size": len(request.content.encode())}
+    return {
+        "path": target,
+        "appended_size": len(request.content.encode()),
+        "size": stat["size"],
+    }
 
 
 @app.post(

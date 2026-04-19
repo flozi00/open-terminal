@@ -22,7 +22,11 @@ def test_append_file_appends_to_existing_file(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"path": str(path), "size": len(" world".encode())}
+    assert response.json() == {
+        "path": str(path),
+        "appended_size": len(" world".encode()),
+        "size": len("hello world".encode()),
+    }
     assert path.read_text(encoding="utf-8") == "hello world"
 
 
@@ -36,5 +40,9 @@ def test_append_file_creates_missing_file_and_parents(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"path": str(path), "size": len("hello".encode())}
+    assert response.json() == {
+        "path": str(path),
+        "appended_size": len("hello".encode()),
+        "size": len("hello".encode()),
+    }
     assert path.read_text(encoding="utf-8") == "hello"
