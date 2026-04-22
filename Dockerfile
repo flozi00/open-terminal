@@ -90,7 +90,7 @@ RUN pip install --no-cache-dir ".[browser]" \
     && sed -i "1s|.*|#!/usr/local/bin/python3-ot|" "$(which open-terminal)"
 
 # Install Playwright Chromium browser + OS dependencies
-RUN playwright install --with-deps chromium
+RUN playwright install --with-deps
 
 RUN useradd -m -s /bin/bash user && echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
