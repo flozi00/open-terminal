@@ -92,6 +92,8 @@ RUN pip install --no-cache-dir ".[browser]" \
 # Install Playwright Chromium browser + OS dependencies
 RUN playwright install --with-deps
 
+RUN curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash
+
 RUN useradd -m -s /bin/bash user && echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 USER user
