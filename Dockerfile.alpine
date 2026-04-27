@@ -32,6 +32,7 @@
 FROM python:3.12.13-alpine AS builder
 
 ARG RTK_VERSION=0.35.0
+ARG OFFICECLI_INSTALL_HOME=/tmp/officecli-home
 
 WORKDIR /src
 
@@ -99,9 +100,16 @@ RUN apk add --no-cache \
         iptables \
         ipset \
         dnsmasq \
+        icu-libs \
         libcap \
         libcap-utils \
         ca-certificates
+
+RUN export HOME="${OFFICECLI_INSTALL_HOME}" \
+    && mkdir -p "${HOME}" \
+    && curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash \
+    && install -m 0755 "${HOME}/.local/bin/officecli" /usr/local/bin/officecli \
+    && rm -rf "${HOME}"
 
 # Copy the pre-built Python packages from the builder stage.
 COPY --from=builder /install /usr/local

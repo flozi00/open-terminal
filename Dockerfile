@@ -3,6 +3,7 @@
 FROM python:3.12.13
 
 ARG RTK_VERSION=0.35.0
+ARG OFFICECLI_INSTALL_HOME=/tmp/officecli-home
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core utilities
@@ -35,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps htop lsof strace sysstat \
     sudo tmux screen tini iptables ipset dnsmasq \
     ca-certificates gnupg apt-transport-https \
+    libicu76 \
     # Capabilities (needed for setcap on Python binary)
     libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
@@ -92,7 +94,11 @@ RUN pip install --no-cache-dir ".[browser]" \
 # Install Playwright Chromium browser + OS dependencies
 RUN playwright install --with-deps
 
-RUN curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash
+RUN export HOME="${OFFICECLI_INSTALL_HOME}" \
+    && mkdir -p "${HOME}" \
+    && curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash \
+    && install -m 0755 "${HOME}/.local/bin/officecli" /usr/local/bin/officecli \
+    && rm -rf "${HOME}"
 
 RUN useradd -m -s /bin/bash user && echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 

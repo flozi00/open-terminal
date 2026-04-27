@@ -30,7 +30,7 @@ That's it — you're up and running at `http://localhost:8000`.
 |---|---|---|---|
 | **Best for** | AI agent sandboxes | Production / hardened | Edge / CI / minimal footprint |
 | **Size** | ~4 GB | ~430 MB | ~230 MB |
-| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, RTK, data science libs | git, curl, jq, RTK | git, curl, jq, RTK |
+| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, RTK, OfficeCLI, data science libs | git, curl, jq, RTK, OfficeCLI | git, curl, jq, RTK, OfficeCLI |
 | **Install packages at runtime** | ✔ (has `sudo`) | ✘ | ✘ |
 | **Multi-user mode** | ✔ | ✘ | ✘ |
 | **Egress firewall** | ✔ | ✔ | ✔ |
