@@ -94,7 +94,10 @@ RUN pip install --no-cache-dir ".[browser]" \
 # Install Playwright Chromium browser + OS dependencies
 RUN playwright install --with-deps
 
-# Install quarkdown
+# Install quarkdown (pre-install JDK so the script doesn't try openjdk-17-jdk,
+# which is unavailable on Debian trixie; default-jdk resolves to JDK 21 there)
+RUN apt-get update && apt-get install -y --no-install-recommends default-jdk \
+    && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://raw.githubusercontent.com/quarkdown-labs/get-quarkdown/refs/heads/main/install.sh | sudo env "PATH=$PATH" bash
 
 RUN export HOME="${OFFICECLI_INSTALL_HOME}" \
