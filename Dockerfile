@@ -94,6 +94,9 @@ RUN pip install --no-cache-dir ".[browser]" \
 # Install Playwright Chromium browser + OS dependencies
 RUN playwright install --with-deps
 
+# Install quarkdown
+RUN curl -fsSL https://raw.githubusercontent.com/quarkdown-labs/get-quarkdown/refs/heads/main/install.sh | sudo env "PATH=$PATH" bash
+
 RUN export HOME="${OFFICECLI_INSTALL_HOME}" \
     && mkdir -p "${HOME}" \
     && curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash \
