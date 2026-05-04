@@ -15,6 +15,8 @@ Requires the ``browser`` optional extra::
 
 import asyncio
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -24,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    Error as PlaywrightError,
     Page,
     Playwright,
     async_playwright,
@@ -39,22 +42,54 @@ _IDLE_TIMEOUT = 30 * 60  # 30 minutes
 _playwright: Optional[Playwright] = None
 _browser: Optional[Browser] = None
 
+_CHROMIUM_LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
+
+
+def _install_browser() -> None:
+    """Run ``playwright install chromium`` to download missing browser binaries."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "Playwright browser auto-install failed. "
+            "Run 'playwright install chromium' manually to resolve this."
+        ) from exc
+
 
 async def _ensure_browser() -> Browser:
-    """Lazily launch the shared browser instance."""
+    """Lazily launch the shared browser instance.
+
+    If the Chromium executable is missing (e.g. after a plain
+    ``pip install open-terminal[browser]`` without running
+    ``playwright install``), the binaries are downloaded automatically
+    before retrying the launch.
+    """
     global _playwright, _browser
     if _browser is None or not _browser.is_connected():
         if _playwright is None:
             _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        )
+        try:
+            _browser = await _playwright.chromium.launch(
+                headless=True,
+                args=_CHROMIUM_LAUNCH_ARGS,
+            )
+        except PlaywrightError as exc:
+            if "Executable doesn't exist" in str(exc):
+                await asyncio.get_event_loop().run_in_executor(None, _install_browser)
+                _browser = await _playwright.chromium.launch(
+                    headless=True,
+                    args=_CHROMIUM_LAUNCH_ARGS,
+                )
+            else:
+                raise
     return _browser
 
 
