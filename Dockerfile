@@ -86,13 +86,10 @@ COPY . .
 # Create a capability-bearing Python copy for the server process only.
 # The system python3 stays clean so user-spawned Python processes remain
 # dumpable (readable via /proc/[pid]/fd/ for port detection).
-RUN pip install --no-cache-dir ".[browser]" \
+RUN pip install --no-cache-dir "." \
     && cp "$(readlink -f "$(which python3)")" /usr/local/bin/python3-ot \
     && setcap cap_setgid+ep /usr/local/bin/python3-ot \
     && sed -i "1s|.*|#!/usr/local/bin/python3-ot|" "$(which open-terminal)"
-
-# Install Playwright Chromium browser + OS dependencies
-RUN playwright install --with-deps
 
 # Install quarkdown (pre-install JDK so the script doesn't try openjdk-17-jdk,
 # which is unavailable on Debian trixie; default-jdk resolves to JDK 21 there)

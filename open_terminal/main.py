@@ -37,7 +37,6 @@ from open_terminal.env import (
     API_KEY,
     BINARY_FILE_MIME_PREFIXES,
     CORS_ALLOWED_ORIGINS,
-    ENABLE_BROWSER,
     ENABLE_NOTEBOOKS,
     ENABLE_SYSTEM_PROMPT,
     ENABLE_TERMINAL,
@@ -108,14 +107,6 @@ def get_system_prompt() -> str:
         "When running commands, check the output to confirm success. "
         "If a command produces no output, that typically means it succeeded."
     )
-
-    if ENABLE_BROWSER:
-        prompt += (
-            "\n\nYou also have browser automation tools available. "
-            "You can create browser sessions, navigate to URLs, click elements, type text, "
-            "fill forms, take screenshots, extract page content, evaluate JavaScript, and more. "
-            "Use the browser tools to interact with web pages when needed."
-        )
 
     if OPEN_TERMINAL_INFO:
         prompt += f"\n\n{OPEN_TERMINAL_INFO}"
@@ -417,7 +408,6 @@ async def get_config():
         "features": {
             "terminal": ENABLE_TERMINAL,
             "notebooks": ENABLE_NOTEBOOKS,
-            "browser": ENABLE_BROWSER,
             "system": ENABLE_SYSTEM_PROMPT,
         },
     }
@@ -1879,16 +1869,3 @@ if ENABLE_NOTEBOOKS:
     from open_terminal.utils.notebooks import create_notebooks_router
 
     app.include_router(create_notebooks_router(verify_api_key))
-
-
-# ---------------------------------------------------------------------------
-# Browser automation (optional)
-# ---------------------------------------------------------------------------
-
-if ENABLE_BROWSER:
-    try:
-        from open_terminal.utils.browser import create_browser_router
-
-        app.include_router(create_browser_router(verify_api_key))
-    except ImportError:
-        pass  # playwright not installed
