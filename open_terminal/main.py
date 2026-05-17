@@ -1,10 +1,8 @@
 import asyncio
-import fnmatch
 import hmac
 import json
 import os
 import platform
-import re
 import shutil
 import signal
 import socket
@@ -115,7 +113,8 @@ def get_system_prompt() -> str:
 
 
 _EXECUTE_DESCRIPTION = (
-    "Run a shell command in the background and return a command ID.\n\n"
+    "Run a shell command. By default (blocking=true) waits for the command to finish and returns its output directly. "
+    "Set blocking=false to start a long-running process in the background and receive only its process ID for later management.\n\n"
     + get_system_info()
 )
 if EXECUTE_DESCRIPTION:
@@ -198,6 +197,15 @@ class ExecRequest(BaseModel):
     env: Optional[dict[str, str]] = Field(
         None,
         description="Extra environment variables merged into the subprocess environment.",
+    )
+    blocking: bool = Field(
+        True,
+        description=(
+            "When true (default), wait for the command to finish and return its output directly. "
+            "Use this for simple, short-lived commands. "
+            "When false, start the command in the background and return only the process ID immediately. "
+            "Use this for long-running processes (e.g. web servers) that you may want to stop later."
+        ),
     )
 
 
@@ -806,222 +814,6 @@ async def replace_file_content(http_request: Request, request: ReplaceRequest, f
     return {"path": target, "size": len(content.encode())}
 
 
-@app.get(
-    "/files/grep",
-    operation_id="grep_search",
-    summary="Search file contents",
-    description="Search for a text pattern across files in a directory. Returns structured matches with file paths, line numbers, and matching lines. Skips binary files.",
-    dependencies=[Depends(verify_api_key)],
-    responses={
-        404: {"description": "Search path not found."},
-        400: {"description": "Invalid regex pattern."},
-        401: {"description": "Invalid or missing API key."},
-    },
-)
-async def grep_search(
-    http_request: Request,
-    query: str = Query(..., description="Text or regex pattern to search for."),
-    path: str = Query(".", description="Directory or file to search in."),
-    regex: bool = Query(True, description="Use regex. Set false for literal search."),
-    case_insensitive: bool = Query(
-        False, description="Perform case-insensitive matching."
-    ),
-    include: Optional[list[str]] = Query(
-        None,
-        description="Glob patterns to filter files (e.g. '*.py'). Files must match at least one pattern.",
-    ),
-    match_per_line: bool = Query(
-        True,
-        description="If true, return each matching line with line numbers. If false, return only the names of matching files.",
-    ),
-    max_results: int = Query(
-        50, description="Maximum number of matches to return.", ge=1, le=500
-    ),
-    fs: UserFS = Depends(get_filesystem),
-):
-    session_id = http_request.headers.get("x-session-id")
-    session_cwd = _get_session_cwd(session_id, fs) if session_id else None
-    target = fs.resolve_path(path, cwd=session_cwd)
-    if not await aiofiles.os.path.exists(target):
-        raise HTTPException(status_code=404, detail="Search path not found")
-
-    flags = re.IGNORECASE if case_insensitive else 0
-    if regex:
-        try:
-            pattern = re.compile(query, flags)
-        except re.error as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}")
-    else:
-        pattern = re.compile(re.escape(query), flags)
-
-    def _search_sync():
-        def _matches_include(filename: str) -> bool:
-            if not include:
-                return True
-            return any(fnmatch.fnmatch(filename, glob) for glob in include)
-
-        matches = []
-        truncated = False
-
-        def _search_file(file_path: str):
-            nonlocal truncated
-            if truncated:
-                return
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="strict") as f:
-                    for line_number, line in enumerate(f, 1):
-                        if pattern.search(line):
-                            if match_per_line:
-                                matches.append(
-                                    {
-                                        "file": file_path,
-                                        "line": line_number,
-                                        "content": line.rstrip("\n\r"),
-                                    }
-                                )
-                                if len(matches) >= max_results:
-                                    truncated = True
-                                    return
-                            else:
-                                matches.append({"file": file_path})
-                                if len(matches) >= max_results:
-                                    truncated = True
-                                return  # one match per file is enough
-            except (UnicodeDecodeError, ValueError, OSError):
-                pass  # skip binary or unreadable files
-
-        if os.path.isfile(target):
-            _search_file(target)
-        else:
-            for dirpath, dirnames, filenames in os.walk(target):
-                # Prune directories belonging to other users.
-                dirnames[:] = [
-                    d for d in dirnames
-                    if fs.is_path_allowed(os.path.join(dirpath, d))
-                ]
-                if truncated:
-                    break
-                for filename in sorted(filenames):
-                    if not _matches_include(filename):
-                        continue
-                    full = os.path.join(dirpath, filename)
-                    if not fs.is_path_allowed(full):
-                        continue
-                    _search_file(full)
-
-        return matches, truncated
-
-    matches, truncated = await asyncio.to_thread(_search_sync)
-    return {
-        "query": query,
-        "path": target,
-        "matches": matches,
-        "truncated": truncated,
-    }
-
-
-@app.get(
-    "/files/glob",
-    operation_id="glob_search",
-    summary="Search files by name",
-    description="Search for files and subdirectories by name within a specified directory using glob patterns. Results will include the relative path, type, size, and modification time.",
-    dependencies=[Depends(verify_api_key)],
-    responses={
-        404: {"description": "Search directory not found."},
-        401: {"description": "Invalid or missing API key."},
-    },
-)
-async def glob_search(
-    http_request: Request,
-    pattern: str = Query(..., description="Glob pattern to search for (e.g. '*.py')."),
-    path: str = Query(".", description="Directory to search within."),
-    exclude: Optional[list[str]] = Query(
-        None, description="Glob patterns to exclude from search results."
-    ),
-    type: Optional[str] = Query(
-        "any",
-        description="Type filter: 'file', 'directory', or 'any'.",
-        pattern="^(file|directory|any)$",
-    ),
-    max_results: int = Query(
-        50, description="Maximum number of matches to return.", ge=1, le=500
-    ),
-    fs: UserFS = Depends(get_filesystem),
-):
-    session_id = http_request.headers.get("x-session-id")
-    session_cwd = _get_session_cwd(session_id, fs) if session_id else None
-    target = fs.resolve_path(path, cwd=session_cwd)
-    if not await aiofiles.os.path.isdir(target):
-        raise HTTPException(status_code=404, detail="Search directory not found")
-
-    def _glob_sync():
-        matches = []
-        truncated = False
-
-        for dirpath, dirnames, filenames in os.walk(target):
-            if truncated:
-                break
-
-            # Prune directories belonging to other users.
-            dirnames[:] = [
-                d for d in dirnames
-                if fs.is_path_allowed(os.path.join(dirpath, d))
-            ]
-
-            entries = []
-            if type in ("any", "directory"):
-                entries.extend([(d, "directory") for d in dirnames])
-            if type in ("any", "file"):
-                entries.extend([(f, "file") for f in filenames])
-
-            for name, entry_type in sorted(entries, key=lambda x: x[0]):
-                if truncated:
-                    break
-
-                full_path = os.path.join(dirpath, name)
-                rel_path = os.path.relpath(full_path, target)
-
-                # Check inclusion pattern
-                if not fnmatch.fnmatch(name, pattern) and not fnmatch.fnmatch(
-                    rel_path, pattern
-                ):
-                    continue
-
-                # Check exclusion patterns
-                if exclude and any(
-                    fnmatch.fnmatch(name, excl) or fnmatch.fnmatch(rel_path, excl)
-                    for excl in exclude
-                ):
-                    continue
-
-                try:
-                    file_stat = os.stat(full_path)
-                    matches.append(
-                        {
-                            "path": rel_path,
-                            "type": entry_type,
-                            "size": file_stat.st_size,
-                            "modified": file_stat.st_mtime,
-                        }
-                    )
-
-                    if len(matches) >= max_results:
-                        truncated = True
-                        break
-                except OSError:
-                    pass
-
-        return matches, truncated
-
-    matches, truncated = await asyncio.to_thread(_glob_sync)
-    return {
-        "pattern": pattern,
-        "path": target,
-        "matches": matches,
-        "truncated": truncated,
-    }
-
-
 
 
 @app.post(
@@ -1171,7 +963,7 @@ async def execute(
     request: ExecRequest,
     wait: Optional[float] = Query(
         None,
-        description="Seconds to wait for the command to finish before returning. If the command completes in time, output is included inline. Null to return immediately.",
+        description="Seconds to wait for the command to finish before returning. If the command completes in time, output is included inline. Null to return immediately. Ignored when blocking=true.",
         ge=0,
         le=300,
     ),
@@ -1199,89 +991,42 @@ async def execute(
     background_process.log_task = asyncio.create_task(log_process(background_process))
     _processes[process_id] = background_process
 
-    if wait is None and EXECUTE_TIMEOUT:
-        wait = EXECUTE_TIMEOUT
-    if wait is not None:
+    if request.blocking:
+        # Wait until the command finishes (no artificial timeout).
+        await background_process.log_task
+        output, next_offset, truncated = await read_log(
+            background_process.log_path, offset=0, tail=tail
+        )
+        return {
+            "id": process_id,
+            "command": request.command,
+            "status": background_process.status,
+            "exit_code": background_process.exit_code,
+            "output": output,
+            "truncated": truncated,
+            "next_offset": next_offset,
+            "log_path": background_process.log_path,
+        }
+
+    # Non-blocking: apply optional wait / EXECUTE_TIMEOUT for partial output,
+    # then return immediately with the process ID.
+    effective_wait = wait
+    if effective_wait is None and EXECUTE_TIMEOUT:
+        effective_wait = EXECUTE_TIMEOUT
+    if effective_wait is not None:
         try:
             await asyncio.wait_for(
-                asyncio.shield(background_process.log_task), timeout=wait
+                asyncio.shield(background_process.log_task), timeout=effective_wait
             )
         except asyncio.TimeoutError:
             pass
-
-    output, next_offset, truncated = await read_log(
-        background_process.log_path, offset=0, tail=tail
-    )
 
     return {
         "id": process_id,
         "command": request.command,
         "status": background_process.status,
         "exit_code": background_process.exit_code,
-        "output": output,
-        "truncated": truncated,
-        "next_offset": next_offset,
-        "log_path": background_process.log_path,
     }
-
-
-@app.get(
-    "/execute/{process_id}/status",
-    operation_id="get_process_status",
-    summary="Get command status and output",
-    description="Returns new output since the last poll, process status, and exit code. Output is drained on read to keep memory bounded.",
-    dependencies=[Depends(verify_api_key)],
-    responses={
-        404: {"description": "Process not found."},
-        401: {"description": "Invalid or missing API key."},
-    },
-)
-async def get_status(
-    process_id: str,
-    wait: Optional[float] = Query(
-        None,
-        description="Seconds to wait for the process to finish before returning. Returns early if the process exits. Null to return immediately.",
-        ge=0,
-        le=300,
-    ),
-    offset: int = Query(
-        0,
-        description="Number of output entries to skip. Use next_offset from the previous response to get only new output.",
-        ge=0,
-    ),
-    tail: Optional[int] = Query(
-        None,
-        description="Return only the last N output entries. Useful to limit response size when only recent output matters.",
-        ge=1,
-    ),
-):
-    background_process = _get_process(process_id)
-
-    if wait is None and EXECUTE_TIMEOUT:
-        wait = EXECUTE_TIMEOUT
-    if wait is not None and background_process.status == "running":
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(background_process.log_task), timeout=wait
-            )
-        except asyncio.TimeoutError:
-            pass
-
-    output, next_offset, truncated = await read_log(
-        background_process.log_path, offset=offset, tail=tail
-    )
-
-    return {
-        "id": background_process.id,
-        "command": background_process.command,
-        "status": background_process.status,
-        "exit_code": background_process.exit_code,
-        "output": output,
-        "truncated": truncated,
-        "next_offset": next_offset,
-        "log_path": background_process.log_path,
-    }
-
 
 @app.post(
     "/execute/{process_id}/input",
