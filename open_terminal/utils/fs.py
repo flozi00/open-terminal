@@ -13,7 +13,6 @@ so that files belong to the provisioned user, not the server process.
 
 import asyncio
 import os
-import shutil
 import subprocess
 
 import aiofiles
@@ -234,17 +233,4 @@ class UserFS:
         self._check_path(path)
         await self._ensure_parents(path)
 
-    async def remove(self, path: str) -> None:
-        """Remove *path* (file or directory)."""
-        self._check_path(path)
-        if os.path.isdir(path):
-            await asyncio.to_thread(shutil.rmtree, path)
-        else:
-            await aiofiles.os.remove(path)
 
-    async def move(self, source: str, destination: str) -> None:
-        """Move *source* to *destination*."""
-        self._check_path(source)
-        self._check_path(destination)
-        await asyncio.to_thread(shutil.move, source, destination)
-        await self._chown(destination)
