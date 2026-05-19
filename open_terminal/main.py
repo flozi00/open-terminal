@@ -227,16 +227,6 @@ class WriteRequest(BaseModel):
     )
 
 
-class AppendRequest(BaseModel):
-    path: str = Field(
-        ...,
-        description="Absolute or relative path to append to. Parent directories are created automatically.",
-    )
-    content: str = Field(
-        ...,
-        description="Text content to append to the file.",
-    )
-
 
 class ReplacementChunk(BaseModel):
     target: str = Field(
@@ -269,16 +259,6 @@ class MkdirRequest(BaseModel):
         description="Directory path to create. Parent directories are created automatically.",
     )
 
-
-class MoveRequest(BaseModel):
-    source: str = Field(
-        ...,
-        description="Path to the file or directory to move.",
-    )
-    destination: str = Field(
-        ...,
-        description="Destination path (new location).",
-    )
 
 
 class ReplaceRequest(BaseModel):
@@ -482,30 +462,6 @@ async def set_cwd(
     return {"cwd": target}
 
 
-@app.get(
-    "/files/list",
-    operation_id="list_files",
-    summary="List directory contents",
-    description="Return a structured listing of files and directories at the given path.",
-    dependencies=[Depends(verify_api_key)],
-    responses={
-        404: {"description": "Directory not found."},
-        401: {"description": "Invalid or missing API key."},
-    },
-)
-async def list_files(
-    http_request: Request,
-    directory: str = Query(".", description="Directory path to list."),
-    fs: UserFS = Depends(get_filesystem),
-):
-    session_id = http_request.headers.get("x-session-id")
-    session_cwd = _get_session_cwd(session_id, fs) if session_id else None
-    target = fs.resolve_path(directory, cwd=session_cwd)
-    if not await fs.isdir(target):
-        raise HTTPException(status_code=404, detail="Directory not found")
-    entries = await fs.listdir(target)
-    return {"dir": target, "entries": entries}
-
 
 @app.get(
     "/files/read",
@@ -668,90 +624,6 @@ async def write_file(http_request: Request, request: WriteRequest, fs: UserFS = 
     return {"path": target, "size": len(request.content.encode())}
 
 
-@app.post(
-    "/files/append",
-    operation_id="append_file",
-    summary="Append to a file",
-    description="Append text content to a file. Creates parent directories automatically and creates the file if it does not exist. Returns both the appended byte count and the resulting file size.",
-    dependencies=[Depends(verify_api_key)],
-    responses={
-        401: {"description": "Invalid or missing API key."},
-    },
-)
-async def append_file(http_request: Request, request: AppendRequest, fs: UserFS = Depends(get_filesystem)):
-    session_id = http_request.headers.get("x-session-id")
-    session_cwd = _get_session_cwd(session_id, fs) if session_id else None
-    target = fs.resolve_path(request.path, cwd=session_cwd)
-    try:
-        await fs.append(target, request.content)
-        stat = await fs.stat(target)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {
-        "path": target,
-        "appended_size": len(request.content.encode()),
-        "size": stat["size"],
-    }
-
-
-@app.post(
-    "/files/mkdir",
-    include_in_schema=False,
-    dependencies=[Depends(verify_api_key)],
-)
-async def mkdir(request: MkdirRequest, fs: UserFS = Depends(get_filesystem)):
-    target = fs.resolve_path(request.path)
-    try:
-        await fs.mkdir(target)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"path": target}
-
-
-@app.delete(
-    "/files/delete",
-    include_in_schema=False,
-    dependencies=[Depends(verify_api_key)],
-)
-async def delete_entry(
-    path: str = Query(..., description="Path to delete."),
-    fs: UserFS = Depends(get_filesystem),
-):
-    target = fs.resolve_path(path)
-    if not await fs.exists(target):
-        raise HTTPException(status_code=404, detail="Path not found")
-    is_dir = await fs.isdir(target)
-    try:
-        await fs.remove(target)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"path": target, "type": "directory" if is_dir else "file"}
-
-
-@app.post(
-    "/files/move",
-    include_in_schema=False,
-    dependencies=[Depends(verify_api_key)],
-)
-async def move_entry(request: MoveRequest, fs: UserFS = Depends(get_filesystem)):
-    source = fs.resolve_path(request.source)
-    destination = fs.resolve_path(request.destination)
-
-    if not await fs.exists(source):
-        raise HTTPException(status_code=404, detail="Source path not found")
-
-    dest_parent = os.path.dirname(destination)
-    if not await fs.isdir(dest_parent):
-        raise HTTPException(status_code=400, detail="Destination parent directory not found")
-
-    if await fs.exists(destination):
-        raise HTTPException(status_code=409, detail="Destination already exists")
-
-    try:
-        await fs.move(source, destination)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"source": source, "destination": destination}
 
 
 @app.post(
