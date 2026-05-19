@@ -495,12 +495,12 @@ async def set_cwd(
 )
 async def list_files(
     http_request: Request,
-    directory: str = Query(".", description="Directory path to list."),
+    path: str = Query(".", description="Directory path to list. Defaults to the current working directory."),
     fs: UserFS = Depends(get_filesystem),
 ):
     session_id = http_request.headers.get("x-session-id")
     session_cwd = _get_session_cwd(session_id, fs) if session_id else None
-    target = fs.resolve_path(directory, cwd=session_cwd)
+    target = fs.resolve_path(path, cwd=session_cwd)
     if not await fs.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = await fs.listdir(target)
