@@ -181,28 +181,6 @@ class UserFS:
             "type": "directory" if os.path.isdir(path) else "file",
         }
 
-    async def listdir(self, path: str) -> list[dict]:
-        """List directory contents with type, size, and mtime."""
-        self._check_path(path)
-        def _list_sync():
-            entries = []
-            for name in sorted(os.listdir(path)):
-                full = os.path.join(path, name)
-                if not self.is_path_allowed(full):
-                    continue
-                try:
-                    s = os.stat(full)
-                    entries.append({
-                        "name": name,
-                        "type": "directory" if os.path.isdir(full) else "file",
-                        "size": s.st_size,
-                        "modified": s.st_mtime,
-                    })
-                except OSError:
-                    continue
-            return entries
-        return await asyncio.to_thread(_list_sync)
-
     async def walk(self, path: str) -> list[tuple[str, list[str], list[str]]]:
         """Walk directory tree. Returns list of (dirpath, dirnames, filenames).
 
@@ -238,16 +216,6 @@ class UserFS:
         if parent:
             await self._ensure_parents(parent)
         async with aiofiles.open(path, "w", encoding=encoding) as f:
-            await f.write(content)
-        await self._chown(path)
-
-    async def append(self, path: str, content: str, encoding: str = "utf-8") -> None:
-        """Append text *content* to *path*, creating parent dirs."""
-        self._check_path(path)
-        parent = os.path.dirname(path)
-        if parent:
-            await self._ensure_parents(parent)
-        async with aiofiles.open(path, "a", encoding=encoding) as f:
             await f.write(content)
         await self._chown(path)
 
